@@ -14,15 +14,10 @@ function openModal(mode, id) {
     const col = document.createElement('div');
     col.className = 'col-lg-3 col-md-6 section-column ' + THEMES[s];
     
-    const statusHeaders = sHeaders.filter(h => h.includes('ステータス') && !parse(h).isFixed);
-
     let html = '<div class="sticky-header">' +
                  '<div class="section-title">' + s + '</div>' +
                  '<div class="p-2 border-bottom" style="background:rgba(255,255,255,0.7)">' +
                    '<div class="row g-1 mb-2">';
-    statusHeaders.forEach(h => {
-      html += '<div class="col-6"><label class="form-label" style="font-size:0.6rem">' + parse(h).label + '</label>' + inp(h) + '</div>';
-    });
     sHeaders.filter(h => parse(h).isFixed).forEach(h => {
       html += '<div class="col-6"><label class="form-label" style="font-size:0.6rem">' + parse(h).label + '</label>' + inp(h) + '</div>';
     });
@@ -35,10 +30,9 @@ function openModal(mode, id) {
                '</div>';
     }
     html += '</div></div><div class="p-1">';
-
+    
     let curSub = undefined, blockHtml = "", processed = new Set();
-    const statusHeaderSet = new Set(statusHeaders);
-    const normalH = sHeaders.filter(h => !parse(h).isFixed && !statusHeaderSet.has(h));
+    const normalH = sHeaders.filter(h => !parse(h).isFixed);
 
     normalH.forEach(h => {
       if(processed.has(h)) return;
