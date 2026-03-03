@@ -1,0 +1,156 @@
+<script>
+function openModal(mode, id) {
+  STATE = mode === 'edit' ? {...ALL_ORDERS.find(o=>o[ID_KEY]===id)} : {ID:''};
+  const container = document.getElementById('dynamicFormContainer');
+  container.innerHTML = '';
+  
+  const SECTIONS = ['基本', '印刷', 'うちわ貼り加工', '加工'];
+  const THEMES = {'基本':'theme-red','印刷':'theme-blue','うちわ貼り加工':'theme-yellow','加工':'theme-green'};
+
+  SECTIONS.forEach(s => {
+    const sHeaders = HEADERS.filter(h => h && h!=='ID' && parse(h).group === s);
+    if(!sHeaders.length) return;
+
+    const col = document.createElement('div');
+    col.className = 'col-lg-3 col-md-6 section-column ' + THEMES[s];
+    
+    let html = '<div class="sticky-header">' +
+                 '<div class="section-title">' + s + '</div>' +
+                 '<div class="p-2 border-bottom" style="background:rgba(255,255,255,0.7)">' +
+                   '<div class="row g-1 mb-2">';
+    sHeaders.filter(h => parse(h).isFixed).forEach(h => {
+      html += '<div class="col-6"><label class="form-label" style="font-size:0.6rem">' + parse(h).label + '</label>' + inp(h) + '</div>';
+    });
+    html += '</div>';
+    if(PDF_CONFIGS[s]) {
+      html += '<button type="button" class="btn btn-outline-pdf btn-sm w-100 mb-1" onclick="generatePDF(\'' + s + '\')"><i class="bi bi-file-pdf"></i> PDF出力</button>' +
+               '<div id="pdf_links_' + s + '" class="d-flex gap-1" style="display:none !important;">' +
+                 '<button type="button" class="btn btn-success btn-sm flex-fill py-0" style="font-size:0.7rem" onclick="window.open(lastPDFLinks[\'' + s + '\'],\'_blank\')">確認</button>' +
+                 '<button type="button" class="btn btn-secondary btn-sm flex-fill py-0" style="font-size:0.7rem" onclick="window.open(\'' + PDF_CONFIGS[s].folderUrl + '\',\'_blank\')">フォルダ</button>' +
+               '</div>';
+    }
+    html += '</div></div><div class="p-1">';
+    
+    let curSub = undefined, blockHtml = "", processed = new Set();
+    const normalH = sHeaders.filter(h => !parse(h).isFixed);
+
+    normalH.forEach(h => {
+      if(processed.has(h)) return;
+      const f = parse(h);
+
+      if(f.sub !== curSub) {
+        if(blockHtml) html += blockHtml + (curSub ? '</div></div>' : '</div>');
+        curSub = f.sub;
+        blockHtml = f.sub ? '<div class="field-block shadow-sm"><div style="font-size:0.8rem;border-bottom:1px solid #eee;margin-bottom:8px;font-weight:bold;">' + f.sub + '</div><div class="row g-2">' : '<div class="row g-2 p-3">';
+      }
+
+      if(f.sub2) {
+         const boxClass = f.isHalfBox ? 'col-6' : 'col-12';
+         blockHtml += '<div class="' + boxClass + ' mb-2"><div class="sub-group-wrapper h-100"><div style="font-size:0.65rem; color:#888; font-weight:bold;">' + f.sub2 + '</div><div class="row g-1">';
+         normalH.filter(sh => parse(sh).sub === f.sub && parse(sh).sub2 === f.sub2).forEach(sf => {
+           if(!processed.has(sf)) {
+             blockHtml += '<div class="' + parse(sf).width + ' mb-1"><label class="form-label" style="font-size:0.7rem;">' + parse(sf).label + '</label>' + inp(sf) + '</div>';
+             processed.add(sf);
+           }
+         });
+         blockHtml += '</div></div></div>';
+      } else if(f.rowNum) {
+        const rFs = HEADERS.filter(rh => parse(rh).rowNum === f.rowNum);
+        blockHtml += '<div class="col-12 border p-2 mb-2 rounded bg-light shadow-sm"><div class="row g-1 align-items-end">';
+        const n=rFs.find(x=>x.includes('名称')), c=rFs.find(x=>x.includes('数')), y=rFs.find(x=>x.includes('円')&&!x.includes('原価'));
+        if(n) blockHtml += '<div class="col-6"><label class="form-label">内容</label>' + inp(n) + '</div>';
+        if(c) blockHtml += '<div class="col-2"><label class="form-label">数</label>' + inp(c) + '</div>';
+        if(y) blockHtml += '<div class="col-4"><label class="form-label">単価</label>' + inp(y) + '</div>';
+        blockHtml += '</div></div>';
+        rFs.forEach(rf => processed.add(rf));
+      } else {
+        blockHtml += '<div class="' + f.width + ' mb-2"><label class="form-label">' + f.label + '</label>' + inp(h) + '</div>';
+        processed.add(h);
+      }
+    });
+    
+    if (blockHtml) html += blockHtml + (curSub ? '</div></div>' : '</div>');
+    html += '</div>'; 
+    col.innerHTML = html; container.appendChild(col);
+  });
+  myModalInstance.show();
+  setTimeout(syncInitial, 150);
+}
+
+function inp(h) {
+  const f = parse(h);
+  const v = STATE[h] !== undefined ? STATE[h] : '';
+  
+  const isImage = h.includes('画像');
+  const isFile = h.includes('デザイン') || h.includes('分納・仕分け明細'); 
+  const isUpload = isImage || isFile;
+
+  const type = isUpload ? 'file' : (h.includes('日') ? 'date' : (h.includes('数') || h.includes('円') ? 'number' : 'text'));
+  
+  const targetFull = sanitize(h);
+  const targetLabel = sanitize(f.label);
+  const targetSub = sanitize(f.sub);
+  const targetSub2 = sanitize(f.sub2);
+
+  let sk = Object.keys(OPTIONS).find(k => sanitize(k) === targetFull);
+  if (!sk) { sk = Object.keys(OPTIONS).find(k => sanitize(k) === targetLabel); }
+  
+  if (!sk && targetSub2) { sk = Object.keys(OPTIONS).find(k => sanitize(k) === targetSub2); }
+  if (!sk && targetSub) { sk = Object.keys(OPTIONS).find(k => sanitize(k) === targetSub); }
+
+  if (sk && OPTIONS[sk]) {
+    let opts = '<option value="">-</option>';
+    OPTIONS[sk].forEach(o => { opts += '<option value="' + o + '" ' + (String(o) === String(v) ? 'selected' : '') + '>' + o + '</option>'; });
+    return '<select name="' + h + '" class="form-select form-select-sm" onchange="updateState(\'' + h + '\',this.value)">' + opts + '</select>';
+  }
+
+  if (type === 'date') {
+    let dVal = ""; 
+    let dayStr = "";
+    if (v) { 
+      const d = new Date(v.toString().replace(/\(.+\)/, '').replace(/\//g, '-')); 
+      if (!isNaN(d)) {
+         const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+         dVal = y + '-' + m + '-' + day;
+         const days = ['日','月','火','水','木','金','土'];
+         dayStr = '(' + days[d.getDay()] + ')';
+      }
+    }
+    
+    return '<div class="input-group input-group-sm">' +
+             '<input type="date" name="' + h + '" class="form-control" value="' + dVal + '" ' +
+               'onchange="updateState(\'' + h + '\',this.value); ' +
+               'const d=new Date(this.value); ' +
+               'this.parentNode.querySelector(\'.day-disp\').value = isNaN(d) ? \'\' : \'(\' + [\'日\',\'月\',\'火\',\'水\',\'木\',\'金\',\'土\'][d.getDay()] + \')\';">' +
+             '<input type="hidden">' +
+             '<input type="text" class="form-control bg-light text-secondary text-center day-disp" style="flex: 0 0 45px; padding: 0;" value="' + dayStr + '" readonly tabindex="-1">' +
+           '</div>';
+  }
+
+  if (isUpload) {
+    let previewHtml = '';
+    if (v && typeof v === 'string') {
+      const match = v.match(/\/(?:file\/d\/|id=)([a-zA-Z0-9_-]+)/);
+      if (match && match[1] || v.match(/^https?:\/\//)) {
+        const fileId = match ? match[1] : '';
+        
+        if (isImage) {
+          const previewUrl = 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w800';
+          previewHtml = '<div class="mt-1 text-center bg-white border rounded p-1"><img src="' + previewUrl + '" style="max-width: 100%; max-height: 120px; object-fit: contain;"></div>';
+        } else {
+          previewHtml = '<div class="mt-1 p-2 bg-white border rounded text-center"><a href="' + v + '" target="_blank" class="btn btn-outline-primary btn-sm w-100"><i class="bi bi-file-earmark-check"></i> 保存したファイルを開く</a></div>';
+        }
+      }
+    }
+    
+    const acceptAttr = isImage ? 'accept="image/*"' : '';
+    
+    return '<input type="hidden" name="' + h + '" value="' + v + '">' +
+           '<input type="file" ' + acceptAttr + ' class="form-control form-control-sm mb-1" onchange="handleFileUpload(this, \'' + h + '\', ' + isImage + ')">' +
+           '<div id="upload_status_' + h + '" style="font-size: 0.8rem; color: #198754; display: none; margin-bottom: 5px;"><div class="spinner-border spinner-border-sm" role="status"></div> アップロード中...</div>' +
+           '<div id="preview_area_' + h + '">' + previewHtml + '</div>';
+  }
+
+  return '<input type="' + type + '" name="' + h + '" class="form-control form-control-sm" value="' + v + '" oninput="updateState(\'' + h + '\',this.value)">';
+}
+</script>
