@@ -16,13 +16,17 @@ function openModal(mode, id) {
     
     const statusHeaders = sHeaders.filter(h => h.includes('ステータス') && !parse(h).isFixed);
 
-    let html = '<div class="sticky-header">' +
-                 '<div class="section-title">' + s + '</div>' +
-                 '<div class="p-2 border-bottom" style="background:rgba(255,255,255,0.7)">' +
-                   '<div class="row g-1 mb-2">';
-    statusHeaders.forEach(h => {
-      html += '<div class="col-6"><label class="form-label" style="font-size:0.6rem">' + parse(h).label + '</label>' + inp(h) + '</div>';
-    });
+    let html = '<div class="sticky-header">';
+    if (statusHeaders.length > 0) {
+      html += '<div class="p-2 border-bottom" style="background:rgba(255,255,255,0.7)"><div class="row g-1 mb-2">';
+      statusHeaders.forEach(h => {
+        html += '<div class="col-6"><label class="form-label" style="font-size:0.6rem">' + parse(h).label + '</label>' + inp(h) + '</div>';
+      });
+      html += '</div></div>';
+    }
+    html += '<div class="section-title">' + s + '</div>' +
+            '<div class="p-2 border-bottom" style="background:rgba(255,255,255,0.7)">' +
+              '<div class="row g-1 mb-2">';
     sHeaders.filter(h => parse(h).isFixed).forEach(h => {
       html += '<div class="col-6"><label class="form-label" style="font-size:0.6rem">' + parse(h).label + '</label>' + inp(h) + '</div>';
     });
