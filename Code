@@ -1,0 +1,251 @@
+// ★★★ 画像の保存先フォルダIDをここに設定してください ★★★
+const IMAGE_UPLOAD_FOLDER_ID = '1Hbh4q5EoyOR73KfbjWlD9p5hJiSGrGqH';
+
+function doGet() {
+  const template = HtmlService.createTemplateFromFile('Index');
+  template.jsonPayload = JSON.stringify({ success: false, message: "Initial load deferred" });
+  return template.evaluate()
+    .setTitle('うちわ管理システム')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+function getDataForClient() {
+  try {
+    const ss = SpreadsheetApp.openById('1VYE4SaQR7ImocrqiFnpE1NyKZj6ejKNZitCaDSCr-QA');
+    const orderSheet = ss.getSheetByName('Orders');
+    const configSheet = ss.getSheetByName('Config');
+    const settingSheet = ss.getSheetByName('ColumnOrder');
+
+    const oLastRow = orderSheet.getLastRow();
+    const oLastCol = orderSheet.getLastColumn();
+    let displayValues = [];
+    if (oLastRow > 0 && oLastCol > 0) displayValues = orderSheet.getRange(1, 1, oLastRow, oLastCol).getDisplayValues();
+
+    const headers = displayValues.length > 0 ? displayValues[0].map(h => h.trim()) : [];
+    const orders = displayValues.length > 1 ? displayValues.slice(1).map(row => {
+      let obj = {}; 
+      headers.forEach((h, i) => { 
+        if (h) {
+          let val = row[i];
+          if (typeof val === 'string' && val.length > 1000) {
+            val = val.substring(0, 50) + "...(※データ長超過のため強制カット)";
+          }
+          obj[h] = val; 
+        } 
+      }); 
+      return obj;
+    }) : [];
+
+    const options = {};
+    if (configSheet) {
+      const cLastRow = configSheet.getLastRow();
+      const cLastCol = configSheet.getLastColumn();
+      if (cLastRow > 0 && cLastCol > 0) {
+        const cData = configSheet.getRange(1, 1, cLastRow, cLastCol).getValues();
+        cData[0].forEach((h, i) => { if(h) options[h.toString().trim()] = cData.slice(1).map(r => r[i]).filter(v => String(v).trim() !== ""); });
+      }
+    }
+
+    let homeColumns = [], pdfConfigs = {};
+    if (settingSheet) {
+      const sLastRow = settingSheet.getLastRow();
+      const sLastCol = settingSheet.getLastColumn();
+      if (sLastRow > 0 && sLastCol > 0) {
+        const sData = settingSheet.getRange(1, 1, sLastRow, sLastCol).getDisplayValues();
+        const sHead = sData[0];
+        sData.slice(1).forEach(r => {
+          const ck = r[sHead.indexOf('Home_column')];
+          if(ck) homeColumns.push({ key: ck.trim(), label: r[sHead.indexOf('Home_name')] || ck });
+          
+          const sec = r[sHead.indexOf('Section')];
+          if(sec && sec.trim() !== "") {
+            const fid = String(r[sHead.indexOf('PDF_Folder_ID')]).trim();
+            const fname = String(r[sHead.indexOf('PDF_Format_Name')]).trim();
+            pdfConfigs[sec.trim()] = { formatName: fname, folderId: fid, folderUrl: fid ? "https://drive.google.com/drive/folders/" + fid : "" };
+          }
+        });
+      }
+    }
+    return { success: true, orders, options, headers, homeColumns, pdfConfigs };
+  } catch (e) { return { success: false, error: e.toString() }; }
+}
+
+function createPDF(orderId, sectionName) {
+  let step = "初期化"; 
+  let ss = null;
+  let tempSheet = null;
+  try {
+    const data = getDataForClient();
+    const config = data.pdfConfigs[sectionName];
+    const order = data.orders.find(o => o['ID'] === orderId);
+    if (!order) throw new Error("対象の受注データが見つかりません。先に保存してください。");
+
+    step = "テンプレート取得";
+    ss = SpreadsheetApp.openById('1VYE4SaQR7ImocrqiFnpE1NyKZj6ejKNZitCaDSCr-QA');
+    const templateSheet = ss.getSheetByName(config.formatName);
+    if (!templateSheet) throw new Error(`フォーマット用のシート「${config.formatName}」が見つかりません。`);
+    
+    step = "一時シートの作成";
+    tempSheet = templateSheet.copyTo(ss);
+    tempSheet.setName("PDF_GEN_" + Utilities.getUuid().slice(0, 6));
+
+    step = "数式の計算を待機";
+    SpreadsheetApp.flush(); 
+
+    step = "メモリ上での超高速置換処理";
+    const tempRange = tempSheet.getDataRange();
+    const values = tempRange.getDisplayValues(); 
+
+    for (let r = 0; r < values.length; r++) {
+      for (let c = 0; c < values[r].length; c++) {
+        let cellValue = String(values[r][c] || "");
+        if (cellValue.includes("{{")) {
+          data.headers.forEach(h => {
+            if (h) {
+              const placeholder = "{{" + h + "}}";
+              if (cellValue.includes(placeholder)) {
+                const val = order[h] !== undefined ? order[h] : "";
+                cellValue = cellValue.split(placeholder).join(String(val));
+              }
+            }
+          });
+          values[r][c] = cellValue;
+        }
+      }
+    }
+
+    step = "置換結果の一括書き戻し";
+    tempRange.setValues(values);
+    SpreadsheetApp.flush(); 
+
+    step = "PDFへの変換";
+    let blob = null;
+    const url = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&size=A4&portrait=true&gid=${tempSheet.getSheetId()}`;
+    const token = ScriptApp.getOAuthToken();
+
+    for (let i = 0; i < 3; i++) {
+      try {
+        if (i > 0) Utilities.sleep(3000); 
+        const response = UrlFetchApp.fetch(url, { headers: { 'Authorization': 'Bearer ' + token }, muteHttpExceptions: true });
+        if (response.getResponseCode() === 200) { blob = response.getBlob(); break; } 
+        else { throw new Error(`HTTP ${response.getResponseCode()}`); }
+      } catch (err) {
+        if (i === 2) throw new Error(`PDF変換に失敗しました。\n詳細: ${err.message}`);
+      }
+    }
+
+    step = "PDFファイルの保存";
+    const titleKey = data.headers.find(h => h.includes('商品タイトル')) || 'ID';
+    const fileName = `${sectionName}発注書_${order[titleKey] || "無題"}.pdf`;
+    
+    // ① フォルダが正しく取得できるかチェック
+    let targetFolder;
+    try {
+      targetFolder = DriveApp.getFolderById(config.folderId);
+    } catch (folderErr) {
+      throw new Error(`【フォルダ取得エラー】ID「${config.folderId}」が存在しないか、アクセス権限（編集権限）がありません。`);
+    }
+
+    // ② ファイルが実際に作成できるかチェック
+    let file;
+    try {
+      file = targetFolder.createFile(blob.setName(fileName));
+    } catch (fileErr) {
+      throw new Error(`【ファイル作成エラー】保存先ドライブの容量がいっぱいになっていないか確認してください。詳細: ${fileErr.message}`);
+    }
+    
+    // ③ 共有権限の付与（失敗しても無視して続行）
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (shareError) {
+      // 組織のセキュリティ制限などで弾かれた場合はログだけ残す
+    }
+
+
+    ss.deleteSheet(tempSheet);
+
+    return { success: true, fileUrl: file.getUrl(), fileName: fileName };
+    
+  } catch (e) { 
+    try { if (ss && tempSheet) ss.deleteSheet(tempSheet); } catch (err) {}
+    return { success: false, message: `【${step}】の処理中にエラーが発生しました。\n詳細: ${e.message || e.toString()}` }; 
+  }
+}
+
+function saveOrder(formData) {
+  try {
+    const ss = SpreadsheetApp.openById('1VYE4SaQR7ImocrqiFnpE1NyKZj6ejKNZitCaDSCr-QA');
+    const sheet = ss.getSheetByName('Orders');
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map(h => h.trim());
+    const id = formData['ID'];
+    const data = sheet.getDataRange().getValues();
+    
+    let rowIndex = id ? data.findIndex(row => String(row[headers.indexOf('ID')]) === String(id)) : -1;
+    const now = new Date();
+    
+    if (rowIndex === -1) {
+      formData['ID'] = Utilities.getUuid();
+      const newRow = headers.map(h => (h === '作成日時' || h === '更新日時') ? now : (formData[h] !== undefined ? formData[h] : ''));
+      sheet.appendRow(newRow);
+    } else {
+      headers.forEach((h, i) => { 
+        if (h && h !== '作成日時') {
+          sheet.getRange(rowIndex + 1, i + 1).setValue(h === '更新日時' ? now : (formData[h] !== undefined ? formData[h] : ''));
+        }
+      });
+    }
+    return { success: true };
+  } catch (e) { return { success: false, message: e.toString() }; }
+}
+
+function deleteOrder(id) {
+  try {
+    if (!id) return { success: false, message: "IDが指定されていません" };
+    const ss = SpreadsheetApp.openById('1VYE4SaQR7ImocrqiFnpE1NyKZj6ejKNZitCaDSCr-QA');
+    const sheet = ss.getSheetByName('Orders');
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0].map(h => h.trim());
+    const rowIndex = data.findIndex(row => String(row[headers.indexOf('ID')]) === String(id));
+    
+    if (rowIndex > 0) {
+      sheet.deleteRow(rowIndex + 1); 
+      return { success: true };
+    }
+    return { success: false, message: "対象のデータが見つかりませんでした。" };
+  } catch (e) { return { success: false, message: e.toString() }; }
+}
+
+// 💡【追加】画像アップロード処理
+function uploadImage(base64Data, filename) {
+  try {
+    if (!IMAGE_UPLOAD_FOLDER_ID || IMAGE_UPLOAD_FOLDER_ID === 'ここにフォルダのIDを貼り付けます') {
+      throw new Error("保存先フォルダのIDが設定されていません。Code.gsの1行目を確認してください。");
+    }
+    const folder = DriveApp.getFolderById(IMAGE_UPLOAD_FOLDER_ID);
+    
+    const contentType = base64Data.substring(5, base64Data.indexOf(';'));
+    const bytes = Utilities.base64Decode(base64Data.split(',')[1]);
+    const blob = Utilities.newBlob(bytes, contentType, filename);
+    
+    const file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    
+    return { success: true, fileUrl: file.getUrl(), fileId: file.getId() };
+  } catch (e) { return { success: false, message: e.toString() }; }
+}
+
+function testDriveAPIAccess() {
+  const testId = '1cl1axWb3TeXSAivdPHSYQjDVkMzSY3A5';
+  try {
+    // Drive APIを使ってアクセスを試みる
+    const folder = Drive.Files.get(testId);
+    console.log("【成功】Drive APIでアクセスできました！ フォルダ名: " + folder.title);
+  } catch (e) {
+    console.error("【Drive APIでの失敗】エラー詳細: " + e.message);
+  }
+}
