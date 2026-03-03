@@ -1,0 +1,148 @@
+<script>
+function renderTable() {
+  const tbody = document.getElementById('ordersTableBody'), thead = document.getElementById('tableHeader');
+  if (!tbody || !thead) return;
+  thead.innerHTML = ''; tbody.innerHTML = '';
+  const cols = (HOME_COLS && HOME_COLS.length > 0) ? HOME_COLS : HEADERS.slice(0, 5).filter(h=>h!=="ID").map(h => ({key: h, label: h}));
+  let hRow = '<tr>'; cols.forEach(c => hRow += '<th>' + c.label + '</th>'); thead.innerHTML = hRow + '</tr>';
+  if (!ALL_ORDERS.length) { tbody.innerHTML = '<tr><td colspan="100" class="text-center py-5">データなし</td></tr>'; return; }
+  ALL_ORDERS.forEach(o => {
+    const tr = document.createElement('tr'); 
+    tr.onclick = () => openModal('edit', o[ID_KEY]);
+    cols.forEach(c => {
+      const td = document.createElement('td'); let val = o[c.key] !== undefined ? o[c.key] : '';
+      if (c.key.includes('ステータス')) {
+        const color = val.includes('完了') ? 'bg-success' : (val.includes('進行') ? 'bg-primary' : 'bg-secondary');
+        td.innerHTML = '<span class="badge ' + color + ' badge-status">' + val + '</span>';
+      } else if (c.key.includes('日')) { td.textContent = formatDateWithDay(val); }
+      else { td.textContent = val; }
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function updateState(name, val) {
+  STATE[name] = val;
+  const form = document.getElementById('orderForm');
+  const elem = form.querySelector('[name="' + name + '"]');
+  if(elem) {
+    elem.value = val;
+    if(elem.type === 'date' && elem.nextSibling) elem.nextSibling.value = formatDateWithDay(val);
+  }
+  const target = sanitize(name);
+  HEADERS.forEach(h => {
+    if(parse(h).sync && sanitize(parse(h).sync) === target && STATE[h] !== val) updateState(h, val);
+  });
+}
+
+function handleFileUpload(inputElement, fieldName, isImage) {
+  const file = inputElement.files[0];
+  if (!file) return;
+
+  const statusDiv = document.getElementById('upload_status_' + fieldName);
+  const previewArea = document.getElementById('preview_area_' + fieldName);
+  
+  statusDiv.style.display = 'block'; 
+  
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const base64Data = e.target.result;
+    
+    google.script.run
+      .withSuccessHandler(function(res) {
+        statusDiv.style.display = 'none';
+        if (res.success) {
+          updateState(fieldName, res.fileUrl);
+          if (isImage) {
+            const previewUrl = 'https://drive.google.com/thumbnail?id=' + res.fileId + '&sz=w800';
+            previewArea.innerHTML = '<div class="mt-1 text-center bg-white border rounded p-1"><img src="' + previewUrl + '" style="max-width: 100%; max-height: 120px; object-fit: contain;"></div>';
+          } else {
+            previewArea.innerHTML = '<div class="mt-1 p-2 bg-white border rounded text-center"><a href="' + res.fileUrl + '" target="_blank" class="btn btn-outline-primary btn-sm w-100"><i class="bi bi-file-earmark-check"></i> 保存したファイルを開く</a></div>';
+          }
+        } else {
+          alert('アップロード失敗: ' + res.message);
+          inputElement.value = ''; 
+        }
+      })
+      .withFailureHandler(function(err) {
+        statusDiv.style.display = 'none';
+        alert('通信エラーが発生しました: ' + err.message);
+        inputElement.value = '';
+      })
+      .uploadImage(base64Data, file.name); 
+  };
+  reader.readAsDataURL(file); 
+}
+
+function generatePDF(s) {
+  if (!STATE[ID_KEY]) return alert("新規データは一度保存してからPDF出力してください");
+  showLoading(true);
+  google.script.run.withSuccessHandler(r => {
+    showLoading(false);
+    if(r.success) {
+      lastPDFLinks[s] = r.fileUrl;
+      const linkArea = document.getElementById('pdf_links_' + s);
+      if(linkArea) linkArea.style.setProperty('display', 'flex', 'important');
+      window.open(r.fileUrl, '_blank');
+    } else alert(r.message);
+  }).createPDF(STATE[ID_KEY], s);
+}
+
+function searchServer() {
+  showLoading(true);
+  google.script.run
+    .withSuccessHandler(d => {
+      showLoading(false);
+      if (d.success) {
+        ALL_ORDERS = d.orders; HEADERS = d.headers; OPTIONS = d.options; HOME_COLS = d.homeColumns; PDF_CONFIGS = d.pdfConfigs;
+        renderTable(); 
+      } else {
+        document.getElementById('ordersTableBody').innerHTML = '<tr><td class="text-danger text-center py-5 fw-bold">サーバーエラー：<br>' + (d.error || 'データ取得に失敗しました') + '</td></tr>';
+      }
+    })
+    .withFailureHandler(err => {
+      showLoading(false);
+      document.getElementById('ordersTableBody').innerHTML = '<tr><td class="text-danger text-center py-5 fw-bold">通信エラー：<br>' + err.message + '</td></tr>';
+    })
+    .getDataForClient();
+}
+
+function formatDateWithDay(d) {
+  if(!d) return "";
+  const date = new Date(d.toString().replace(/\//g, '-'));
+  if(isNaN(date)) return d;
+  const days=['日','月','火','水','木','金','土'];
+  return date.getFullYear() + '/' + (date.getMonth()+1) + '/' + date.getDate() + '(' + days[date.getDay()] + ')';
+}
+
+function showLoading(b) { document.getElementById('loadingOverlay').classList.toggle('hidden', !b); }
+
+function submitForm() { 
+  showLoading(true); 
+  google.script.run.withSuccessHandler(r => { 
+    if(r.success) { myModalInstance.hide(); searchServer(); } 
+    else { alert(r.message); showLoading(false); } 
+  }).saveOrder(STATE); 
+}
+
+function deleteOrderAction() { 
+  if(!STATE[ID_KEY]) return myModalInstance.hide();
+  if(confirm('このデータを削除しますか？')) {
+    showLoading(true);
+    google.script.run.withSuccessHandler(r => {
+      if(r.success) { myModalInstance.hide(); searchServer(); }
+      else { alert(r.message); showLoading(false); }
+    }).deleteOrder(STATE[ID_KEY]); 
+  }
+}
+
+function syncInitial() { 
+  HEADERS.forEach(h => { 
+    if(parse(h).sync) { 
+      const srcH = HEADERS.find(head => sanitize(head) === sanitize(parse(h).sync)); 
+      if(srcH && STATE[srcH] && !STATE[h]) updateState(h, STATE[srcH]); 
+    } 
+  }); 
+}
+</script>
