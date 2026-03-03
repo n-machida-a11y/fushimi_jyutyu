@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>うちわ管理システム</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+  <?!= include('Styles'); ?>
+  <script>
+    const ID_KEY = 'ID';
+    const TITLE_WORD = '商品タイトル';
+    
+    let ALL_ORDERS = [], HEADERS = [], OPTIONS = {}, HOME_COLS = [], PDF_CONFIGS = {}, STATE = {}, myModalInstance = null;
+    const lastPDFLinks = {};
+
+    function sanitize(s) {
+      return (s || "").toString().replace(/★|\[.+?\]|@sync\(.+?\)|#\d+|\s|　/g, "").trim();
+    }
+  </script>
+</head>
+<body>
+  <div id="loadingOverlay">
+    <div class="spinner-border text-primary"></div><div class="mt-2 fw-bold">読込中...</div>
+  </div>
+
+  <nav class="navbar navbar-dark bg-dark sticky-top">
+    <div class="container-fluid px-4">
+      <span class="navbar-brand fw-bold">うちわ管理システム</span>
+      <button class="btn btn-success btn-sm ms-auto" onclick="openModal('new')">+ 新規登録</button>
+    </div>
+  </nav>
+
+  <div class="container-fluid mt-4">
+    <div class="table-container shadow-sm bg-white">
+      <table class="table table-hover align-middle">
+        <thead id="tableHeader"></thead>
+        <tbody id="ordersTableBody"><tr><td class="text-center py-5">読込中...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="modal fade" id="editModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-fullscreen">
+      <div class="modal-content">
+        <div class="modal-header bg-dark text-white p-2">
+          <h6 class="modal-title">受注データ編集</h6>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body bg-light" id="modalBody">
+          <form id="orderForm" style="display:contents;">
+            <div id="dynamicFormContainer" class="row g-2 p-2 w-100 align-items-stretch m-0"></div>
+          </form>
+        </div>
+        <div class="modal-footer p-2 shadow-lg bg-white">
+          <button class="btn btn-outline-danger btn-sm" onclick="deleteOrderAction()">削除</button>
+          <button class="btn btn-primary btn-sm px-5 ms-auto" onclick="submitForm()">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script id="server-payload" type="application/json"><?!= jsonPayload ?></script>
+
+  <?!= include('Scripts'); ?>
+  <?!= include('FormBuilder'); ?>
+
+  <script>
+    window.onload = () => {
+      myModalInstance = new bootstrap.Modal(document.getElementById('editModal'));
+      
+      let checkCount = 0;
+      const checkAndRender = () => {
+        if (typeof renderTable === 'function' && typeof openModal === 'function') {
+          const p = JSON.parse(document.getElementById('server-payload').textContent);
+          if (p.success) {
+            ALL_ORDERS = p.orders; HEADERS = p.headers; OPTIONS = p.options; HOME_COLS = p.homeColumns; PDF_CONFIGS = p.pdfConfigs;
+            renderTable();
+            document.getElementById('loadingOverlay').classList.add('hidden');
+          } else { searchServer(); }
+        } else {
+          checkCount++;
+          if (checkCount > 50) { 
+            document.getElementById('loadingOverlay').innerHTML = '<div class="text-danger fw-bold bg-white p-3 border rounded shadow">プログラムの読み込みに失敗しました。<br>FormBuilder.html 等の構文エラーが原因です。</div>';
+            return;
+          }
+          setTimeout(checkAndRender, 100);
+        }
+      };
+      checkAndRender();
+    };
+
+    function parse(h) {
+      const m = { raw: h, label: h, group: '基本', sub: null, sub2: null, width: 'col-12', sync: null, rowNum: null, isFixed: h.includes('★') };
+      if(!h || typeof h !== 'string') return m;
+      let w = h.trim();
+      const syncMatch = w.match(/@sync\((.+?)\)/);
+      if(syncMatch) { m.sync = syncMatch[1].trim(); w = w.replace(syncMatch[0], ''); }
+      
+      const wMatch = w.match(/\[w(\d)\]/i);
+      if(wMatch) { 
+        const n = wMatch[1]; 
+        m.width = n==='4' ? 'col-3' : n==='3' ? 'col-4' : n==='2' ? 'col-6' : 'col-12'; 
+        w = w.replace(wMatch[0], ''); 
+      }
+      
+      const rMatch = w.match(/#(\d+)/); if(rMatch) { m.rowNum = rMatch[1]; w = w.replace(rMatch[0], ''); }
+      const halfMatch = w.match(/\[half\]/i);
+      if(halfMatch) { m.isHalfBox = true; w = w.replace(halfMatch[0], ''); }
+
+      const parts = w.replace(/★|\[addr\]|\[zip\]/g, '').split(/[|:]/).map(s=>s.trim()).filter(Boolean);
+      if(parts.length >= 1) m.group = parts[0];
+      if(parts.length >= 4) { m.sub = parts[1]; m.sub2 = parts[2]; m.label = parts[3]; }
+      else if(parts.length === 3) { m.sub = parts[1]; m.label = parts[2]; }
+      else if(parts.length === 2) { m.label = parts[1]; }
+      return m;
+    }
+  </script>
+</body>
+</html>
